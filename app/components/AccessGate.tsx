@@ -1,278 +1,279 @@
 "use client";
 
 import React, { useState, useEffect } from "react";
-import Script from "next/script";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
-declare global {
-  interface Window {
-    PaystackPop?: {
-      setup: (options: Record<string, any>) => { openIframe: () => void };
-    };
-  }
+interface AccessGateProps {
+  children: React.ReactNode;
 }
 
-const PLAN_CARDS = [
-  { id: "TRIAL", tier: "TRIAL PASS", price: "$20", ngn: "₦30,000", credits: "5,000 Credits", mins: "12 Mins Live", kobo: 3000000, badge: "" },
-  { id: "STARTER", tier: "STARTER", price: "$49", ngn: "₦73,500", credits: "14,000 Credits", mins: "35 Mins Live", kobo: 7350000, badge: "+14% Bonus" },
-  { id: "PRO", tier: "PRO CREATOR", price: "$99", ngn: "₦148,500", credits: "30,000 Credits", mins: "75 Mins Live", kobo: 14850000, badge: "MOST POPULAR" },
-  { id: "STUDIO", tier: "STUDIO", price: "$249", ngn: "₦373,500", credits: "80,000 Credits", mins: "200 Mins Live", kobo: 37350000, badge: "+28% Bonus" },
-  { id: "ELITE", tier: "ELITE VIP", price: "$499", ngn: "₦748,500", credits: "180,000 Credits", mins: "450 Mins Live", kobo: 74850000, badge: "+44% Bonus" },
-];
-
-export default function AccessGate({ children }: { children: React.ReactNode }) {
+export default function AccessGate({ children }: AccessGateProps) {
   const pathname = usePathname();
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean | null>(null);
+  const [mode, setMode] = useState<"signin" | "signup">("signup");
+  const [name, setName] = useState("");
   const [email, setEmail] = useState("");
-  const [unlocked, setUnlocked] = useState(false);
-  const [planName, setPlanName] = useState("");
-  const [planType, setPlanType] = useState<string | null>(null);
-  const [credits, setCredits] = useState<number>(0);
-  const [expiresAt, setExpiresAt] = useState<string | null>(null);
-  const [secondsLeft, setSecondsLeft] = useState<number | null>(null);
-  const [checking, setChecking] = useState(true);
-  const [errorMsg, setErrorMsg] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
 
-  if (pathname === "/admin") {
+  // Bypass the user sign-up gate for /admin routes
+  const isAdminRoute = pathname?.startsWith("/admin");
+
+  useEffect(() => {
+    if (isAdminRoute) {
+      setIsAuthenticated(true);
+      return;
+    }
+
+    const savedUser = localStorage.getItem("mighty_ai_user");
+    if (savedUser) {
+      setIsAuthenticated(true);
+    } else {
+      setIsAuthenticated(false);
+    }
+  }, [isAdminRoute]);
+
+  const handleGoogleSignIn = async () => {
+    setError("");
+    setLoading(true);
+    try {
+      // Replace this with your NextAuth signIn("google") or Firebase/Clerk Google OAuth call
+      localStorage.setItem(
+        "mighty_ai_user",
+        JSON.stringify({ provider: "google", email: "user@gmail.com" })
+      );
+      setIsAuthenticated(true);
+    } catch {
+      setError("Google sign-in failed. Please try again.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleEmailAuth = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError("");
+
+    if (!email || !password) {
+      setError("Please enter both your email and password.");
+      return;
+    }
+
+    if (mode === "signup" && password.length < 6) {
+      setError("Password must be at least 6 characters.");
+      return;
+    }
+
+    setLoading(true);
+    try {
+      // Replace this block with your backend auth API endpoint (/api/auth/login or /api/auth/signup)
+      localStorage.setItem(
+        "mighty_ai_user",
+        JSON.stringify({
+          provider: "email",
+          name: mode === "signup" ? name : undefined,
+          email,
+        })
+      );
+      setIsAuthenticated(true);
+    } catch {
+      setError("Authentication failed. Please check your details and try again.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  if (isAdminRoute) {
     return <>{children}</>;
   }
 
-  useEffect(() => {
-    const saved = localStorage.getItem("mighty_user_email");
-    if (saved) {
-      setEmail(saved);
-      verifyEmailAccess(saved);
-    } else {
-      setChecking(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    if (!unlocked || !expiresAt) {
-      setSecondsLeft(null);
-      return;
-    }
-    const tick = () => {
-      const diff = Math.max(0, Math.floor((new Date(expiresAt).getTime() - Date.now()) / 1000));
-      setSecondsLeft(diff);
-      if (diff <= 0) {
-        setUnlocked(false);
-        setErrorMsg("Your session time has expired. Choose a plan below to continue.");
-      }
-    };
-    tick();
-    const timer = setInterval(tick, 1000);
-    return () => clearInterval(timer);
-  }, [unlocked, expiresAt]);
-
-  const verifyEmailAccess = async (targetEmail: string) => {
-    setChecking(true);
-    setErrorMsg("");
-    try {
-      const res = await fetch(`/api/access?email=${encodeURIComponent(targetEmail.trim())}`);
-      const data = await res.json();
-      if (data.allowed) {
-        localStorage.setItem("mighty_user_email", targetEmail.trim().toLowerCase());
-        setUnlocked(true);
-        setPlanName(data.planName || "Active Plan");
-        setPlanType(data.planType);
-        setCredits(data.credits ?? 5000);
-        setExpiresAt(data.expiresAt || null);
-      } else {
-        setUnlocked(false);
-        setErrorMsg(
-          data.expired
-            ? "Your pass has expired. Choose any plan below to renew."
-            : "Enter your email and choose a plan below to unlock the studio."
-        );
-      }
-    } catch {
-      setErrorMsg("Unable to verify access right now.");
-    } finally {
-      setChecking(false);
-    }
-  };
-
-  const handlePayPlan = (plan: (typeof PLAN_CARDS)[number]) => {
-    const cleanEmail = email.trim().toLowerCase();
-    if (!cleanEmail || !cleanEmail.includes("@")) {
-      setErrorMsg("Please enter your email address at the top first.");
-      return;
-    }
-
-    const publicKey = process.env.NEXT_PUBLIC_PAYSTACK_PUBLIC_KEY;
-    const currency = process.env.NEXT_PUBLIC_PLAN_CURRENCY || "NGN";
-
-    if (!publicKey || !window.PaystackPop) {
-      setErrorMsg("Paystack checkout is loading or NEXT_PUBLIC_PAYSTACK_PUBLIC_KEY is missing.");
-      return;
-    }
-
-    const handler = window.PaystackPop.setup({
-      key: publicKey,
-      email: cleanEmail,
-      amount: plan.kobo,
-      currency,
-      ref: `MIGHTY_${plan.id}_${Date.now()}`,
-      callback: async (response: { reference: string }) => {
-        setChecking(true);
-        try {
-          const res = await fetch("/api/access", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              action: "verify_paystack",
-              email: cleanEmail,
-              planId: plan.id,
-              reference: response.reference,
-            }),
-          });
-          const data = await res.json();
-          if (!res.ok || !data.allowed) throw new Error(data.error || "Verification failed.");
-          localStorage.setItem("mighty_user_email", cleanEmail);
-          setUnlocked(true);
-          setPlanName(data.planName);
-          setPlanType(data.planType);
-          setCredits(data.credits);
-          setExpiresAt(data.expiresAt);
-        } catch (err: any) {
-          setErrorMsg(err.message);
-        } finally {
-          setChecking(false);
-        }
-      },
-      onClose: () => setErrorMsg("Payment window closed before completion."),
-    });
-
-    handler.openIframe();
-  };
-
-  const formatTimer = (secs: number) => {
-    const m = Math.floor(secs / 60);
-    const s = secs % 60;
-    return `${m}:${s < 10 ? "0" : ""}${s}`;
-  };
-  if (unlocked) {
-    const isUnlimited = planType === "VIP_FREE" && expiresAt === null;
+  if (isAuthenticated === null) {
     return (
-      <div>
-        <div className="bg-[#0d0f17] border-b border-zinc-800 px-4 py-2 text-xs flex flex-wrap items-center justify-between gap-2 text-zinc-300">
-          <div className="flex flex-wrap items-center gap-3">
-            <span>User: <strong className="text-white">{email}</strong></span>
-            <span className="px-2.5 py-0.5 rounded-full bg-indigo-500/20 border border-indigo-500/40 text-indigo-300 font-semibold">
-              {isUnlimited ? "Owner VIP Unlimited" : `${planName} • ${credits.toLocaleString()} Credits`}
-            </span>
-            {!isUnlimited && secondsLeft !== null && (
-              <span className="px-2.5 py-0.5 rounded-full bg-amber-500/20 border border-amber-500/40 text-amber-300 font-semibold">
-                Time Left: {formatTimer(secondsLeft)}
-              </span>
-            )}
-          </div>
-          <div className="flex items-center gap-3">
-            <Link href="/admin" className="text-indigo-400 hover:underline">Owner Admin</Link>
-            <button onClick={() => { localStorage.removeItem("mighty_user_email"); setUnlocked(false); }} className="text-zinc-400 hover:text-white">
-              Sign Out
-            </button>
-          </div>
-        </div>
-        {children}
+      <div className="min-h-screen flex items-center justify-center bg-neutral-950 text-white">
+        <p className="text-sm text-neutral-400">Loading Mighty AI Live...</p>
       </div>
     );
   }
 
+  if (isAuthenticated) {
+    return <>{children}</>;
+  }
+
   return (
-    <div className="min-h-screen bg-[#0a0c12] text-white p-6 flex flex-col justify-center">
-      <Script src="https://paystack.co" strategy="lazyOnload" />
-      <div className="max-w-6xl mx-auto w-full space-y-6">
-        <div className="text-center space-y-2">
-          <span className="inline-block px-3 py-1 rounded-full bg-indigo-500/10 border border-indigo-500/30 text-indigo-400 text-xs font-semibold">
-            MIGHTY AI LIVE — CREDITS & BILLING
-          </span>
-          <h1 className="text-3xl font-bold">Choose Your Live Studio Plan</h1>
-          <p className="text-xs text-zinc-400">Real-Time AI Face Swap + 36-Language Cloned Voice Translator</p>
+    <div className="min-h-screen flex items-center justify-center bg-neutral-950 text-white px-4 py-12">
+      <div className="w-full max-w-md rounded-2xl border border-neutral-800 bg-neutral-900/90 p-8 shadow-2xl">
+        {/* Header */}
+        <div className="mb-6 text-center">
+          <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-xl bg-indigo-600/20 border border-indigo-500/30 text-indigo-400 font-bold text-lg">
+            M
+          </div>
+          <h1 className="text-2xl font-bold tracking-tight">Mighty AI Live</h1>
+          <p className="mt-1.5 text-sm text-neutral-400">
+            {mode === "signup"
+              ? "Create an account to access the AI Voice Studio"
+              : "Sign in to your Mighty AI Live account"}
+          </p>
         </div>
 
-        <div className="max-w-lg mx-auto flex flex-col sm:flex-row gap-2">
-          <input
-            type="email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            placeholder="Enter your email address first..."
-            className="flex-1 bg-[#11141d] border border-zinc-700 rounded-lg px-4 py-2.5 text-sm"
-          />
+        {/* Mode Switcher Tabs */}
+        <div className="mb-6 grid grid-cols-2 rounded-lg bg-neutral-950 p-1 border border-neutral-800">
           <button
             type="button"
-            onClick={() => verifyEmailAccess(email)}
-            disabled={checking || !email.trim()}
-            className="px-4 py-2.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-xs font-semibold whitespace-nowrap"
+            onClick={() => {
+              setMode("signup");
+              setError("");
+            }}
+            className={`rounded-md py-2 text-xs font-semibold transition ${
+              mode === "signup"
+                ? "bg-indigo-600 text-white shadow"
+                : "text-neutral-400 hover:text-white"
+            }`}
           >
-            {checking ? "Checking..." : "Already VIP / Paid? Unlock"}
+            Create Account
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setMode("signin");
+              setError("");
+            }}
+            className={`rounded-md py-2 text-xs font-semibold transition ${
+              mode === "signin"
+                ? "bg-indigo-600 text-white shadow"
+                : "text-neutral-400 hover:text-white"
+            }`}
+          >
+            Sign In
           </button>
         </div>
 
-        {errorMsg && (
-          <div className="max-w-lg mx-auto p-3 rounded-lg bg-red-950/50 border border-red-800 text-red-300 text-xs text-center">
-            {errorMsg}
-          </div>
-        )}
+        {/* Continue with Google (Gmail) */}
+        <button
+          type="button"
+          onClick={handleGoogleSignIn}
+          disabled={loading}
+          className="flex w-full items-center justify-center gap-3 rounded-lg border border-neutral-700 bg-white px-4 py-2.5 text-sm font-semibold text-neutral-900 transition hover:bg-neutral-100 disabled:opacity-50"
+        >
+          <svg className="h-4 w-4" viewBox="0 0 24 24" aria-hidden="true">
+            <path
+              fill="#4285F4"
+              d="M23.745 12.27c0-.7-.06-1.4-.19-2.07H12v4.51h6.6c-.29 1.52-1.14 2.82-2.4 3.68v3.05h3.88c2.27-2.09 3.665-5.17 3.665-9.17Z"
+            />
+            <path
+              fill="#34A853"
+              d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.88-3.05c-1.08.72-2.45 1.16-4.05 1.16-3.12 0-5.77-2.11-6.72-4.96H1.29v3.14C3.26 21.3 7.31 24 12 24Z"
+            />
+            <path
+              fill="#FBBC05"
+              d="M5.28 14.24c-.24-.72-.38-1.49-.38-2.24s.14-1.52.38-2.24V6.62H1.29C.47 8.24 0 10.06 0 12s.47 3.76 1.29 5.38l3.99-3.14Z"
+            />
+            <path
+              fill="#EA4335"
+              d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0 7.31 0 3.26 2.7 1.29 6.62l3.99 3.14c.95-2.85 3.6-4.96 6.72-4.96Z"
+            />
+          </svg>
+          <span>Continue with Google</span>
+        </button>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4 pt-2">
-          {PLAN_CARDS.map((p) => {
-            const isPopular = p.badge === "MOST POPULAR";
-            return (
-              <div
-                key={p.id}
-                className={`relative bg-[#11141d] rounded-2xl p-5 flex flex-col justify-between border ${
-                  isPopular ? "border-indigo-500 shadow-lg shadow-indigo-500/15" : "border-zinc-800"
-                }`}
-              >
-                {p.badge && (
-                  <span
-                    className={`absolute -top-3 left-1/2 -translate-x-1/2 px-2.5 py-0.5 rounded-full text-[10px] font-bold whitespace-nowrap ${
-                      isPopular ? "bg-indigo-600 text-white" : "bg-emerald-900/90 text-emerald-300 border border-emerald-700"
-                    }`}
-                  >
-                    {p.badge}
-                  </span>
-                )}
-
-                <div className="text-center space-y-2">
-                  <p className="text-xs font-bold tracking-wider text-zinc-400">{p.tier}</p>
-                  <p className="text-3xl font-extrabold">{p.price}</p>
-                  <p className="text-[11px] text-zinc-400">{p.ngn} bank transfer</p>
-                  <div className="pt-1">
-                    <span className="inline-block px-2.5 py-1 rounded-full bg-indigo-500/10 border border-indigo-500/30 text-indigo-300 text-xs font-semibold">
-                      {p.credits}
-                    </span>
-                  </div>
-                  <p className="text-xs text-emerald-400 font-medium pt-1">⏱ {p.mins}</p>
-                  <ul className="text-[11px] text-zinc-300 space-y-1.5 pt-3 text-left border-t border-zinc-800/80">
-                    <li>✓ Live Face & Video Studio</li>
-                    <li>✓ 36-Language Voice Clone</li>
-                    <li>✓ OBS & Streaming Ready</li>
-                  </ul>
-                </div>
-
-                <button
-                  type="button"
-                  onClick={() => handlePayPlan(p)}
-                  className={`mt-5 w-full py-2.5 rounded-lg text-xs font-semibold transition ${
-                    isPopular
-                      ? "bg-indigo-600 hover:bg-indigo-500 text-white"
-                      : "bg-[#1a1f2e] hover:bg-zinc-700 text-zinc-200 border border-zinc-700"
-                  }`}
-                >
-                  Subscribe Now
-                </button>
-              </div>
-            );
-          })}
+        {/* Divider */}
+        <div className="my-5 flex items-center gap-3">
+          <div className="h-px flex-1 bg-neutral-800" />
+          <span className="text-xs uppercase tracking-wider text-neutral-500">
+            or with email
+          </span>
+          <div className="h-px flex-1 bg-neutral-800" />
         </div>
 
-        <div className="text-center pt-2">
-          <Link href="/admin" className="text-xs text-zinc-500 hover:text-zinc-300">
-            Owner Admin Board →
+        {/* Email & Password Form */}
+        <form onSubmit={handleEmailAuth} className="space-y-4">
+          {mode === "signup" && (
+            <div>
+              <label
+                htmlFor="name"
+                className="mb-1.5 block text-xs font-medium text-neutral-300"
+              >
+                Full Name
+              </label>
+              <input
+                id="name"
+                type="text"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder="Jane Doe"
+                required
+                className="w-full rounded-lg border border-neutral-700 bg-neutral-950 px-3.5 py-2.5 text-sm text-white placeholder-neutral-500 focus:border-indigo-500 focus:outline-none"
+              />
+            </div>
+          )}
+
+          <div>
+            <label
+              htmlFor="email"
+              className="mb-1.5 block text-xs font-medium text-neutral-300"
+            >
+              Email Address
+            </label>
+            <input
+              id="email"
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="you@gmail.com"
+              required
+              className="w-full rounded-lg border border-neutral-700 bg-neutral-950 px-3.5 py-2.5 text-sm text-white placeholder-neutral-500 focus:border-indigo-500 focus:outline-none"
+            />
+          </div>
+
+          <div>
+            <label
+              htmlFor="password"
+              className="mb-1.5 block text-xs font-medium text-neutral-300"
+            >
+              Password
+            </label>
+            <input
+              id="password"
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder="••••••••"
+              required
+              className="w-full rounded-lg border border-neutral-700 bg-neutral-950 px-3.5 py-2.5 text-sm text-white placeholder-neutral-500 focus:border-indigo-500 focus:outline-none"
+            />
+          </div>
+
+          {error && (
+            <p className="text-sm text-red-400" role="alert">
+              {error}
+            </p>
+          )}
+
+          <button
+            type="submit"
+            disabled={loading}
+            className="w-full rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-indigo-500 disabled:opacity-50"
+          >
+            {loading
+              ? "Please wait..."
+              : mode === "signup"
+              ? "Create Free Account"
+              : "Sign In"}
+          </button>
+        </form>
+
+        {/* Footer */}
+        <div className="mt-6 text-center text-xs text-neutral-500">
+          By continuing, you agree to Mighty AI Live&apos;s{" "}
+          <Link href="/terms" className="text-neutral-300 underline hover:text-white">
+            Terms
+          </Link>{" "}
+          and{" "}
+          <Link href="/privacy" className="text-neutral-300 underline hover:text-white">
+            Privacy Policy
           </Link>
+          .
         </div>
       </div>
     </div>
