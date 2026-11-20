@@ -1,4 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
+import dns from "node:dns";
+
+dns.setDefaultResultOrder("ipv4first");
 
 const LANG_CODES: Record<string, string> = {
   Spanish: "es", English: "en", French: "fr", Portuguese: "pt", German: "de",
@@ -22,21 +25,54 @@ export async function POST(req: NextRequest) {
     const sl = direction === "to_english" ? foreignCode : "en";
     const tl = direction === "to_english" ? "en" : foreignCode;
 
-    const url = `https://googleapis.com{encodeURIComponent(
-      sl
-    )}&tl=${encodeURIComponent(tl)}&dt=t&q=${encodeURIComponent(text.trim())}`;
+    // Primary: Google Translate free endpoint
+    try {
+      const params = new URLSearchParams({
+        client: "gtx",
+        sl,
+        tl,
+        dt: "t",
+        q: text.trim(),
+      });
 
-    const res = await fetch(url);
-    const data = await res.json();
-    const parts = Array.isArray(data?.at(0)) ? data.at(0) : [];
-    const translatedText = parts.map((p: any) => p?.at(0) || "").join("").trim();
+      const res = await fetch(
+        `https://googleapis.com{params.toString()}`,
+        {
+          headers: { "User-Agent": "Mozilla/5.0" },
+          cache: "no-store",
+        }
+      );
 
-    if (!translatedText) {
+      if (res.ok) {
+        const data = await res.json();
+        const parts = Array.isArray(data?.at(0)) ? data.at(0) : [];
+        const translatedText = parts.map((p: any) => p?.at(0) || "").join("").trim();
+        if (translatedText) {
+          return NextResponse.json({ translatedText, langCode: tl, sourceCode: sl });
+        }
+      }
+    } catch {
+      // Fall through to backup translator
+    }
+
+    // Fallback: MyMemory Translation API
+    const mmRes = await fetch(
+      `https://translated.net{encodeURIComponent(text.trim())}&langpair=${sl}|${tl}`,
+      { cache: "no-store" }
+    );
+    const mmData = await mmRes.json();
+    const fallbackText = mmData?.responseData?.translatedText?.trim();
+
+    if (!fallbackText) {
       return NextResponse.json({ error: "Translation failed." }, { status: 502 });
     }
 
-    return NextResponse.json({ translatedText, langCode: tl, sourceCode: sl });
+    return NextResponse.json({ translatedText: fallbackText, langCode: tl, sourceCode: sl });
   } catch (err: any) {
-    return NextResponse.json({ error: err?.message || "Unexpected error." }, { status: 500 });
+    console.error("Translate route error:", err);
+    return NextResponse.json(
+      { error: err?.cause?.message || err?.message || "Unexpected error." },
+      { status: 500 }
+    );
   }
 }
